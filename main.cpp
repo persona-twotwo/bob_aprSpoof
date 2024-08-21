@@ -165,7 +165,67 @@ int arpSend(char* dev, int type, ArpResource arpST) {
     return res;
 }
 
-string getMacOnARPReply(char* dev, string myMac, string targetIP, int retryCount = 10, int timeoutSec = 5) {
+// string getMacOnARPReply(char* dev, string myMac, string targetIP, int retryCount = 10, int timeoutSec = 5) {
+//     char errbuf[PCAP_ERRBUF_SIZE];
+//     pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+//     if (handle == nullptr) {
+//         throw runtime_error("Couldn't open device " + string(dev) + ": " + string(errbuf));
+//     }
+
+//     struct bpf_program fp;
+//     string filter_exp = "arp";
+//     if (pcap_compile(handle, &fp, filter_exp.c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
+//         pcap_close(handle);
+//         throw runtime_error("Couldn't parse filter " + filter_exp + ": " + string(pcap_geterr(handle)));
+//     }
+
+//     if (pcap_setfilter(handle, &fp) == -1) {
+//         pcap_close(handle);
+//         throw runtime_error("Couldn't install filter " + filter_exp + ": " + string(pcap_geterr(handle)));
+//     }
+
+//     for (int i = 0; i < retryCount; ++i) {
+//         cout << "Attempt " << (i + 1) << " to get MAC address." << endl;
+
+//         auto startTime = chrono::steady_clock::now();
+
+//         while (true) {
+//             struct pcap_pkthdr* header;
+//             const u_char* packet;
+//             int res = pcap_next_ex(handle, &header, &packet);
+//             if (res == 0) continue;
+//             if (res == -1 || res == -2) break;
+
+//             EthArpPacket* recvPacket = (EthArpPacket*)packet;
+
+//             if (ntohs(recvPacket->eth_.type_) == EthHdr::Arp &&
+//                 ntohs(recvPacket->arp_.op_) == ArpHdr::Reply) {
+
+//                 Ip targetIpNetOrder = htonl(Ip(targetIP));
+
+//                 if (recvPacket->arp_.sip_ == targetIpNetOrder &&
+//                     recvPacket->eth_.dmac_ == Mac(myMac)) {
+
+//                     // Convert MAC address to string using correct formatting
+//                     pcap_close(handle);
+//                     return macToString((u_char*)recvPacket->arp_.smac_);
+//                 }
+//             }
+
+//             auto currentTime = chrono::steady_clock::now();
+//             auto elapsedTime = chrono::duration_cast<chrono::seconds>(currentTime - startTime).count();
+//             if (elapsedTime > timeoutSec) {
+//                 cout << "Timeout reached. Retrying..." << endl;
+//                 break;
+//             }
+//         }
+//     }
+
+//     pcap_close(handle);
+//     throw runtime_error("No ARP reply received for the specified MAC address after multiple attempts");
+// }
+
+string getMacOnARPReply(char* dev, string myMac) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
     if (handle == nullptr) {
@@ -184,47 +244,26 @@ string getMacOnARPReply(char* dev, string myMac, string targetIP, int retryCount
         throw runtime_error("Couldn't install filter " + filter_exp + ": " + string(pcap_geterr(handle)));
     }
 
-    for (int i = 0; i < retryCount; ++i) {
-        cout << "Attempt " << (i + 1) << " to get MAC address." << endl;
+    while (true) {
+        struct pcap_pkthdr* header;
+        const u_char* packet;
+        int res = pcap_next_ex(handle, &header, &packet);
+        if (res == 0) continue;
+        if (res == -1 || res == -2) break;
 
-        auto startTime = chrono::steady_clock::now();
+        EthArpPacket* recvPacket = (EthArpPacket*)packet;
 
-        while (true) {
-            struct pcap_pkthdr* header;
-            const u_char* packet;
-            int res = pcap_next_ex(handle, &header, &packet);
-            if (res == 0) continue;
-            if (res == -1 || res == -2) break;
-
-            EthArpPacket* recvPacket = (EthArpPacket*)packet;
-
-            if (ntohs(recvPacket->eth_.type_) == EthHdr::Arp &&
-                ntohs(recvPacket->arp_.op_) == ArpHdr::Reply) {
-
-                Ip targetIpNetOrder = htonl(Ip(targetIP));
-
-                if (recvPacket->arp_.sip_ == targetIpNetOrder &&
-                    recvPacket->eth_.dmac_ == Mac(myMac)) {
-
-                    // Convert MAC address to string using correct formatting
-                    pcap_close(handle);
-                    return macToString((u_char*)recvPacket->arp_.smac_);
-                }
-            }
-
-            auto currentTime = chrono::steady_clock::now();
-            auto elapsedTime = chrono::duration_cast<chrono::seconds>(currentTime - startTime).count();
-            if (elapsedTime > timeoutSec) {
-                cout << "Timeout reached. Retrying..." << endl;
-                break;
-            }
+        if (ntohs(recvPacket->eth_.type_) == EthHdr::Arp &&
+            ntohs(recvPacket->arp_.op_) == ArpHdr::Reply &&
+            recvPacket->eth_.dmac_ == Mac(myMac)) {
+            pcap_close(handle);
+            return string(recvPacket->arp_.smac_);
         }
     }
 
     pcap_close(handle);
-    throw runtime_error("No ARP reply received for the specified MAC address after multiple attempts");
+    throw runtime_error("No ARP reply received for the specified MAC address");
 }
-
 
 bool checkIP(const string& ip) {
     vector<string> parts;
@@ -244,41 +283,52 @@ bool checkIP(const string& ip) {
     return true;
 }
 
+// string getMacOfIP(MyNet& myNet, const string& ip) {
+//     // Start a thread to listen for ARP replies
+//     std::string receivedMac = "";
+//     std::mutex macMutex;
+//     std::atomic<bool> stopFlag(false);
+
+//     std::thread arpReceiver([&]() {
+//         try {
+//             std::string mac = getMacOnARPReply(myNet.getDev(), myNet.getMyMac(), ip);
+//             std::lock_guard<std::mutex> lock(macMutex);
+//             cout << receivedMac;
+//             receivedMac = mac;
+//         } catch (const std::exception& e) {
+//             std::cerr << "ARP reply capture error: " << e.what() << std::endl;
+//         }
+//         stopFlag = true;
+//     });
+
+//     // Send ARP requests until a reply is received or timeout occurs
+//     while (!stopFlag) {
+//         arpSend(myNet.getDev(), 0, ArpResource(
+//             myNet.getMyMac(),
+//             "FF:FF:FF:FF:FF:FF", 
+//             myNet.getMyMac(),
+//             "00:00:00:00:00:00",
+//             myNet.getMyIP(),
+//             ip
+//         ));
+//         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+//     }
+
+//     arpReceiver.join();
+
+//     std::lock_guard<std::mutex> lock(macMutex);
+//     return receivedMac;
+// }
 string getMacOfIP(MyNet& myNet, const string& ip) {
-    // Start a thread to listen for ARP replies
-    std::string receivedMac = "";
-    std::mutex macMutex;
-    std::atomic<bool> stopFlag(false);
-
-    std::thread arpReceiver([&]() {
-        try {
-            std::string mac = getMacOnARPReply(myNet.getDev(), myNet.getMyMac(), ip);
-            std::lock_guard<std::mutex> lock(macMutex);
-            cout << receivedMac;
-            receivedMac = mac;
-        } catch (const std::exception& e) {
-            std::cerr << "ARP reply capture error: " << e.what() << std::endl;
-        }
-        stopFlag = true;
-    });
-
-    // Send ARP requests until a reply is received or timeout occurs
-    while (!stopFlag) {
-        arpSend(myNet.getDev(), 0, ArpResource(
-            myNet.getMyMac(),
-            "FF:FF:FF:FF:FF:FF", 
-            myNet.getMyMac(),
-            "00:00:00:00:00:00",
-            myNet.getMyIP(),
-            ip
-        ));
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    arpReceiver.join();
-
-    std::lock_guard<std::mutex> lock(macMutex);
-    return receivedMac;
+    arpSend(myNet.getDev(), 0, ArpResource(
+        myNet.getMyMac(),
+        "FF:FF:FF:FF:FF:FF", 
+        myNet.getMyMac(),
+        "00:00:00:00:00:00",
+        myNet.getMyIP(),
+        ip
+    ));
+    return getMacOnARPReply(myNet.getDev(), myNet.getMyMac());
 }
 
 
@@ -342,7 +392,7 @@ void packetForwarding(const std::string& dev, const std::string& senderMac, cons
             std::memcpy(eth->h_source, ether_aton(myMac.c_str()), 6);
         } else {
             // 내가 관심있는 트래픽이 아니므로 무시
-            // std::cout << "Ignoring packet from " << srcMac << " to " << destMac << std::endl;
+            std::cout << "Ignoring packet from " << srcMac << " to " << destMac << std::endl;
             continue;
         }
 
@@ -374,7 +424,7 @@ void printMaps() {
 void arpSpoofBoth(MyNet& myNet, const std::string& senderIP, const std::string& targetIP, std::atomic<bool>& stopFlag) {
     while (!stopFlag) {
         // sender -> target ARP 스푸핑
-        printMaps();
+        // printMaps();
         if (!arpAttack(myNet, senderIP, targetIP)) {
             std::cerr << "Failed to send ARP Spoofing packet from " << senderIP << " to " << targetIP << std::endl;
         }
